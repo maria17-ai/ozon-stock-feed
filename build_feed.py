@@ -61,7 +61,10 @@ def write_feed(offers):
     offers_element = ET.SubElement(shop, "offers")
 
     for article, quantity in offers.items():
-        offer = ET.SubElement(offers_element, "offer", {"id": article})
+        # Ozon seller articles in this account were originally imported with
+        # literal double quotes, e.g. "00006149". The feed ID must match them.
+        ozon_article = f'"{article}"'
+        offer = ET.SubElement(offers_element, "offer", {"id": ozon_article})
         outlets = ET.SubElement(offer, "outlets")
         ET.SubElement(
             outlets,
