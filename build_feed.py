@@ -3,6 +3,7 @@
 
 from datetime import datetime, timezone
 from pathlib import Path
+import shutil
 import urllib.request
 import xml.etree.ElementTree as ET
 
@@ -15,6 +16,7 @@ WORK_DIR = Path(".work")
 PUBLIC_DIR = Path("public")
 SOURCE_FILE = WORK_DIR / "supplier.yml"
 OUTPUT_FILE = PUBLIC_DIR / "ozon_stock_moscow.yml"
+XML_OUTPUT_FILE = PUBLIC_DIR / "ozon_stock_moscow.xml"
 
 
 def download_source():
@@ -69,6 +71,7 @@ def write_feed(offers):
 
     ET.indent(root, space="  ")
     ET.ElementTree(root).write(OUTPUT_FILE, encoding="utf-8", xml_declaration=True)
+    shutil.copyfile(OUTPUT_FILE, XML_OUTPUT_FILE)
 
     positive = sum(value > 0 for value in offers.values())
     index = f"""<!doctype html>
@@ -76,7 +79,7 @@ def write_feed(offers):
 <body><h1>Фид остатков Ozon</h1>
 <p>Обновлено (UTC): {timestamp}</p>
 <p>Артикулов: {len(offers)}; с положительным остатком: {positive}</p>
-<p><a href=\"ozon_stock_moscow.yml\">Открыть YML</a></p></body></html>
+<p><a href=\"ozon_stock_moscow.xml\">Открыть XML/YML-фид</a></p></body></html>
 """
     (PUBLIC_DIR / "index.html").write_text(index, encoding="utf-8")
 
@@ -84,4 +87,3 @@ def write_feed(offers):
 if __name__ == "__main__":
     download_source()
     write_feed(extract_offers())
-
