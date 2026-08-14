@@ -1,0 +1,51 @@
+name: Update Ozon stock feed
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 * * * *"
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Download repository
+        uses: actions/checkout@v4
+      - name: Build feed
+        run: python3 build_feed.py
+      - name: Validate feed
+        run: |
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          path = "public/ozon_stock_moscow.yml"
+          root = ET.parse(path).getroot()
+          offers = root.findall("./shop/offers/offer")
+          assert root.tag == "yml_catalog"
+          assert len(offers) > 1000
+          assert len({item.attrib["id"] for item in offers}) == len(offers)
+          print(f"Validated {len(offers)} offers")
+          PY
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      - name: Upload Pages files
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+      - name: Publish
+        id: deployment
+        uses: actions/deploy-pages@v4
+
