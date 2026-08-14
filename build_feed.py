@@ -61,10 +61,11 @@ def write_feed(offers):
     offers_element = ET.SubElement(shop, "offers")
 
     for article, quantity in offers.items():
-        # XML adds the quotes around the attribute value itself:
-        # <offer id="00006149">. Do not put literal quotes inside the ID.
-        offer = ET.SubElement(offers_element, "offer", {"id": article})
-        ET.SubElement(offer, "param", {"name": "articul"}).text = article
+        # The seller SKU in Ozon contains literal quote characters, e.g.
+        # "00006149". ElementTree safely serializes those characters as
+        # &quot;, so the resulting XML remains valid and Ozon reads the exact SKU.
+        ozon_article = f'"{article}"'
+        offer = ET.SubElement(offers_element, "offer", {"id": ozon_article})
         outlets = ET.SubElement(offer, "outlets")
         ET.SubElement(
             outlets,
