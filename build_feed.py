@@ -65,6 +65,7 @@ def write_feed(offers):
         # literal double quotes, e.g. "00006149". The feed ID must match them.
         ozon_article = f'"{article}"'
         offer = ET.SubElement(offers_element, "offer", {"id": ozon_article})
+        ET.SubElement(offer, "param", {"name": "articul"}).text = article
         outlets = ET.SubElement(offer, "outlets")
         ET.SubElement(
             outlets,
