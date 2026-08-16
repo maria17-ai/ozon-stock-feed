@@ -17,6 +17,7 @@ PUBLIC_DIR = Path("public")
 SOURCE_FILE = WORK_DIR / "supplier.yml"
 OUTPUT_FILE = PUBLIC_DIR / "ozon_stock_moscow.yml"
 XML_OUTPUT_FILE = PUBLIC_DIR / "ozon_stock_moscow.xml"
+OZON_ARTICLES_FILE = Path("ozon_articles.txt")
 
 
 def download_source():
@@ -52,6 +53,28 @@ def extract_offers():
     return offers
 
 
+def load_ozon_articles():
+    if not OZON_ARTICLES_FILE.exists():
+        raise FileNotFoundError(
+            f"Required Ozon article list is missing: {OZON_ARTICLES_FILE}"
+        )
+    articles = {
+        line.strip()
+        for line in OZON_ARTICLES_FILE.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    if not articles:
+        raise ValueError("Ozon article list is empty; refusing to publish an empty feed")
+    return sorted(articles)
+
+
+def supplier_article_from_ozon(ozon_article):
+    """Remove only the literal outer quotes used in numeric Ozon seller SKUs."""
+    if len(ozon_article) >= 2 and ozon_article[0] == ozon_article[-1] == '"':
+        return ozon_article[1:-1]
+    return ozon_article
+
+
 def write_feed(offers):
     PUBLIC_DIR.mkdir(exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
@@ -60,11 +83,18 @@ def write_feed(offers):
     ET.SubElement(shop, "name").text = "1000 размеров — остатки Ozon"
     offers_element = ET.SubElement(shop, "offers")
 
-    for article, quantity in offers.items():
-        # The seller SKU in Ozon contains literal quote characters, e.g.
-        # "00006149". ElementTree safely serializes those characters as
-        # &quot;, so the resulting XML remains valid and Ozon reads the exact SKU.
-        ozon_article = f'"{article}"'
+    ozon_articles = load_ozon_articles()
+    matched = 0
+    zeroed = 0
+    for ozon_article in ozon_articles:
+        supplier_article = supplier_article_from_ozon(ozon_article)
+        if supplier_article in offers:
+            quantity = offers[supplier_article]
+            matched += 1
+        else:
+            # Explicit zero applies only to the Moscow outlet in this offer.
+            quantity = 0
+            zeroed += 1
         offer = ET.SubElement(offers_element, "offer", {"id": ozon_article})
         outlets = ET.SubElement(offer, "outlets")
         ET.SubElement(
@@ -77,12 +107,15 @@ def write_feed(offers):
     ET.ElementTree(root).write(OUTPUT_FILE, encoding="utf-8", xml_declaration=True)
     shutil.copyfile(OUTPUT_FILE, XML_OUTPUT_FILE)
 
-    positive = sum(value > 0 for value in offers.values())
+    positive = sum(
+        offers.get(supplier_article_from_ozon(article), 0) > 0
+        for article in ozon_articles
+    )
     index = f"""<!doctype html>
 <html lang=\"ru\"><meta charset=\"utf-8\"><title>Ozon stock feed</title>
 <body><h1>Фид остатков Ozon</h1>
 <p>Обновлено (UTC): {timestamp}</p>
-<p>Артикулов: {len(offers)}; с положительным остатком: {positive}</p>
+<p>Артикулов Ozon: {len(ozon_articles)}; найдено у поставщика: {matched}; отсутствует у поставщика и обнулено: {zeroed}; с положительным остатком: {positive}</p>
 <p><a href=\"ozon_stock_moscow.xml\">Открыть XML/YML-фид</a></p></body></html>
 """
     (PUBLIC_DIR / "index.html").write_text(index, encoding="utf-8")
