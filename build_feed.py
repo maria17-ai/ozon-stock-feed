@@ -123,4 +123,10 @@ def write_feed(offers):
 
 if __name__ == "__main__":
     download_source()
-    write_feed(extract_offers())
+    supplier_offers = extract_offers()
+    write_feed(supplier_offers)
+
+    # Build the Yandex Kit feed from the same downloaded supplier snapshot.
+    from build_kit_feed import write_feed as write_kit_feed
+
+    write_kit_feed(supplier_offers)
