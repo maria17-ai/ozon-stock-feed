@@ -31,6 +31,20 @@ def load_kit_articles():
     return sorted(articles)
 
 
+def load_fallback_prices():
+    try:
+        from kit_fallback_prices import FALLBACK_PRICES
+    except ImportError as error:
+        raise FileNotFoundError(
+            "Required Kit fallback price module is missing: kit_fallback_prices.py"
+        ) from error
+    return {
+        article: Decimal(price_text)
+        for article, price_text in FALLBACK_PRICES.items()
+        if article and Decimal(price_text) > 0
+    }
+
+
 def supplier_article_from_kit(kit_article):
     """Remove only literal outer quotes used in the linked YML identifier."""
     if len(kit_article) >= 2 and kit_article[0] == kit_article[-1] == '"':
@@ -78,12 +92,14 @@ def write_feed(supplier_offers, supplier_prices=None):
     offers_element = ET.SubElement(shop, "offers")
 
     kit_articles = load_kit_articles()
+    fallback_prices = load_fallback_prices()
     if supplier_prices is None:
         supplier_prices = extract_supplier_prices()
     matched = 0
     zeroed = 0
     positive = 0
     priced = 0
+    fallback_priced = 0
     for kit_article in kit_articles:
         supplier_article = supplier_article_from_kit(kit_article)
         if supplier_article in supplier_offers:
@@ -97,10 +113,13 @@ def write_feed(supplier_offers, supplier_prices=None):
         offer = ET.SubElement(offers_element, "offer", {"id": kit_article})
         ET.SubElement(offer, "count").text = str(quantity)
         if supplier_article in supplier_prices:
-            ET.SubElement(offer, "price").text = str(
-                kit_price(supplier_prices[supplier_article])
-            )
+            price = kit_price(supplier_prices[supplier_article])
+            ET.SubElement(offer, "price").text = str(price)
             priced += 1
+        elif kit_article in fallback_prices:
+            price = fallback_prices[kit_article]
+            ET.SubElement(offer, "price").text = format(price.normalize(), "f")
+            fallback_priced += 1
 
     ET.indent(root, space="  ")
     ET.ElementTree(root).write(OUTPUT_FILE, encoding="utf-8", xml_declaration=True)
@@ -114,7 +133,7 @@ def write_feed(supplier_offers, supplier_prices=None):
   <li><a href=\"ozon_stock_moscow.xml\">Ozon — склад Москва</a></li>
   <li><a href=\"yandex_kit_stock.xml\">Яндекс Кит — Основной склад</a></li>
 </ul>
-<p>Яндекс Кит: товаров {len(kit_articles)}; найдено у поставщика {matched}; отсутствует у поставщика и обнулено {zeroed}; обновлено цен с наценкой 18%: {priced}; положительный остаток {positive}.</p>
+<p>Яндекс Кит: товаров {len(kit_articles)}; найдено у поставщика {matched}; отсутствует у поставщика и обнулено {zeroed}; обновлено цен с наценкой 18%: {priced}; сохранено цен из выгрузки Кита: {fallback_priced}; положительный остаток {positive}.</p>
 </body></html>
 """
     (PUBLIC_DIR / "index.html").write_text(index, encoding="utf-8")
