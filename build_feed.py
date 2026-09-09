@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Download the supplier feed and publish Moscow stock in Ozon YML format."""
+"""Download the supplier feed and publish Ozon prices and Moscow stock."""
 
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation, ROUND_CEILING
 from pathlib import Path
 import shutil
 import urllib.request
@@ -18,6 +19,11 @@ SOURCE_FILE = WORK_DIR / "supplier.yml"
 OUTPUT_FILE = PUBLIC_DIR / "ozon_stock_moscow.yml"
 XML_OUTPUT_FILE = PUBLIC_DIR / "ozon_stock_moscow.xml"
 OZON_ARTICLES_FILE = Path("ozon_articles.txt")
+MARKUP_RATE = Decimal("0.30")
+MIN_MARKUP = Decimal("500")
+FULFILMENT_COST = Decimal("246.20")
+NET_REVENUE_RATE = Decimal("0.47")
+PRICE_STEP = Decimal("10")
 
 
 def download_source():
@@ -30,14 +36,18 @@ def download_source():
         SOURCE_FILE.write_bytes(response.read())
 
 
-def extract_offers():
+def extract_supplier_data():
     offers = {}
+    dealer_prices = {}
+    standard_prices = {}
     for _, element in ET.iterparse(SOURCE_FILE, events=("end",)):
         if element.tag != "offer":
             continue
 
         article = ""
         quantity = 0
+        dealer_price_text = ""
+        standard_price_text = ""
         for child in element:
             if child.tag == "param" and child.attrib.get("name") == "articul":
                 article = (child.text or "").strip()
@@ -46,11 +56,43 @@ def extract_offers():
                     quantity = max(0, int(float((child.text or "0").strip())))
                 except ValueError:
                     quantity = 0
+            elif child.tag == "dealer_price":
+                dealer_price_text = (child.text or "").strip()
+            elif child.tag == "price":
+                standard_price_text = (child.text or "").strip()
 
         if article:
             offers[article] = quantity
+            for target, price_text in (
+                (dealer_prices, dealer_price_text),
+                (standard_prices, standard_price_text),
+            ):
+                try:
+                    price = Decimal(price_text)
+                except InvalidOperation:
+                    continue
+                if price > 0:
+                    target[article] = price
         element.clear()
+    return offers, dealer_prices, standard_prices
+
+
+def extract_offers():
+    """Backward-compatible quantity-only reader used by build_kit_feed.py."""
+    offers, _, _ = extract_supplier_data()
     return offers
+
+
+def ozon_price(dealer_price):
+    """Calculate the Ozon FBS price and round it up to the nearest 10 rubles."""
+    dealer_price = Decimal(dealer_price)
+    markup = max(dealer_price * MARKUP_RATE, MIN_MARKUP)
+    raw_price = (dealer_price + markup + FULFILMENT_COST) / NET_REVENUE_RATE
+    return int(
+        (raw_price / PRICE_STEP).quantize(
+            Decimal("1"), rounding=ROUND_CEILING
+        ) * PRICE_STEP
+    )
 
 
 def load_ozon_articles():
@@ -75,17 +117,19 @@ def supplier_article_from_ozon(ozon_article):
     return ozon_article
 
 
-def write_feed(offers):
+def write_feed(offers, dealer_prices=None):
     PUBLIC_DIR.mkdir(exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
     root = ET.Element("yml_catalog", {"date": timestamp})
     shop = ET.SubElement(root, "shop")
-    ET.SubElement(shop, "name").text = "1000 размеров — остатки Ozon"
+    ET.SubElement(shop, "name").text = "1000 размеров — цены и остатки Ozon"
     offers_element = ET.SubElement(shop, "offers")
 
     ozon_articles = load_ozon_articles()
     matched = 0
     zeroed = 0
+    priced = 0
+    dealer_prices = dealer_prices or {}
     for ozon_article in ozon_articles:
         supplier_article = supplier_article_from_ozon(ozon_article)
         if supplier_article in offers:
@@ -96,6 +140,11 @@ def write_feed(offers):
             quantity = 0
             zeroed += 1
         offer = ET.SubElement(offers_element, "offer", {"id": ozon_article})
+        if supplier_article in dealer_prices:
+            ET.SubElement(offer, "price").text = str(
+                ozon_price(dealer_prices[supplier_article])
+            )
+            priced += 1
         outlets = ET.SubElement(offer, "outlets")
         ET.SubElement(
             outlets,
@@ -112,10 +161,10 @@ def write_feed(offers):
         for article in ozon_articles
     )
     index = f"""<!doctype html>
-<html lang=\"ru\"><meta charset=\"utf-8\"><title>Ozon stock feed</title>
-<body><h1>Фид остатков Ozon</h1>
+<html lang=\"ru\"><meta charset=\"utf-8\"><title>Фид цен и остатков Ozon</title>
+<body><h1>Фид цен и остатков Ozon</h1>
 <p>Обновлено (UTC): {timestamp}</p>
-<p>Артикулов Ozon: {len(ozon_articles)}; найдено у поставщика: {matched}; отсутствует у поставщика и обнулено: {zeroed}; с положительным остатком: {positive}</p>
+<p>Артикулов Ozon: {len(ozon_articles)}; найдено у поставщика: {matched}; отсутствует у поставщика и обнулено: {zeroed}; обновлено цен: {priced}; с положительным остатком: {positive}</p>
 <p><a href=\"ozon_stock_moscow.xml\">Открыть XML/YML-фид</a></p></body></html>
 """
     (PUBLIC_DIR / "index.html").write_text(index, encoding="utf-8")
@@ -123,10 +172,10 @@ def write_feed(offers):
 
 if __name__ == "__main__":
     download_source()
-    supplier_offers = extract_offers()
-    write_feed(supplier_offers)
+    supplier_offers, dealer_prices, standard_prices = extract_supplier_data()
+    write_feed(supplier_offers, dealer_prices)
 
     # Build the Yandex Kit feed from the same downloaded supplier snapshot.
     from build_kit_feed import write_feed as write_kit_feed
 
-    write_kit_feed(supplier_offers)
+    write_kit_feed(supplier_offers, standard_prices)
