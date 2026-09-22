@@ -112,7 +112,9 @@ def write_feed(supplier_offers, supplier_prices=None):
             zeroed += 1
         if quantity > 0:
             positive += 1
-        offer = ET.SubElement(offers_element, "offer", {"id": kit_article})
+        # KIT is configured to match by seller article. Keep the offer ID bare
+        # and publish the quoted article explicitly in both standard fields.
+        offer = ET.SubElement(offers_element, "offer", {"id": supplier_article})
         ET.SubElement(offer, "count").text = str(quantity)
         if supplier_article in supplier_prices:
             price = kit_price(supplier_prices[supplier_article])
@@ -122,6 +124,8 @@ def write_feed(supplier_offers, supplier_prices=None):
             price = fallback_prices[kit_article]
             ET.SubElement(offer, "price").text = format(price.normalize(), "f")
             fallback_priced += 1
+        ET.SubElement(offer, "vendorCode").text = kit_article
+        ET.SubElement(offer, "param", {"name": "articul"}).text = kit_article
 
     ET.indent(root, space="  ")
     ET.ElementTree(root).write(OUTPUT_FILE, encoding="utf-8", xml_declaration=True)
