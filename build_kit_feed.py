@@ -15,9 +15,11 @@ OUTPUT_FILE = PUBLIC_DIR / "yandex_kit_stock.yml"
 XML_OUTPUT_FILE = PUBLIC_DIR / "yandex_kit_stock.xml"
 PRICE_RATE = Decimal("0.18")
 MIN_MARKUP = Decimal("450")
+VLADIVOSTOK_MIN_SUPPLIER_PRICE = Decimal("10000")
 MOSCOW_KIT_LOCATION = "Основной склад"
 VLADIVOSTOK_SUPPLIER_LOCATION = "Владивосток"
 VLADIVOSTOK_KIT_LOCATION = "Владивосток"
+LOW_PRICE_MOSCOW_KIT_LOCATION = "Склад №1нино"
 
 
 def load_kit_articles():
@@ -134,14 +136,29 @@ def write_feed(supplier_offers, supplier_prices=None):
     for kit_article in kit_articles:
         supplier_article = supplier_article_from_kit(kit_article)
         if supplier_article in supplier_offers:
-            moscow_quantity = supplier_offers[supplier_article]
-            vladivostok_quantity = vladivostok_offers.get(supplier_article, 0)
+            supplier_moscow_quantity = supplier_offers[supplier_article]
+            supplier_price = supplier_prices.get(supplier_article, Decimal("0"))
+            # Products from 10,000 rubles go to the Main (Moscow) warehouse
+            # and Vladivostok. Cheaper products use only Warehouse No. 1nino.
+            if supplier_price >= VLADIVOSTOK_MIN_SUPPLIER_PRICE:
+                moscow_quantity = supplier_moscow_quantity
+                vladivostok_quantity = vladivostok_offers.get(supplier_article, 0)
+                low_price_moscow_quantity = 0
+            else:
+                moscow_quantity = 0
+                vladivostok_quantity = 0
+                low_price_moscow_quantity = supplier_moscow_quantity
             matched += 1
         else:
             moscow_quantity = 0
             vladivostok_quantity = 0
+            low_price_moscow_quantity = 0
             zeroed += 1
-        if moscow_quantity > 0 or vladivostok_quantity > 0:
+        if (
+            moscow_quantity > 0
+            or vladivostok_quantity > 0
+            or low_price_moscow_quantity > 0
+        ):
             positive += 1
         # KIT is configured to match by seller article. Publish the bare
         # article consistently: quotation marks prevent literal matching.
@@ -152,6 +169,9 @@ def write_feed(supplier_offers, supplier_prices=None):
         ET.SubElement(
             offer, "quantity", {"location": VLADIVOSTOK_KIT_LOCATION}
         ).text = str(vladivostok_quantity)
+        ET.SubElement(
+            offer, "quantity", {"location": LOW_PRICE_MOSCOW_KIT_LOCATION}
+        ).text = str(low_price_moscow_quantity)
         if supplier_article in supplier_prices:
             price = kit_price(supplier_prices[supplier_article])
             ET.SubElement(offer, "price").text = str(price)
@@ -173,9 +193,9 @@ def write_feed(supplier_offers, supplier_prices=None):
 <p>Обновлено (UTC): {timestamp}</p>
 <ul>
   <li><a href=\"ozon_stock_moscow.xml\">Ozon — склад Москва</a></li>
-  <li><a href=\"yandex_kit_stock.xml\">Яндекс Кит — Основной склад и Владивосток</a></li>
+  <li><a href=\"yandex_kit_stock.xml\">Яндекс Кит — три склада</a></li>
 </ul>
-<p>Яндекс Кит: товаров {len(kit_articles)}; найдено у поставщика {matched}; отсутствует у поставщика и обнулено на двух обновляемых складах {zeroed}; обновлено цен с наценкой 18%, но не менее 450 ₽: {priced}; сохранено цен из выгрузки Кита: {fallback_priced}; положительный остаток хотя бы на одном складе {positive}.</p>
+<p>Яндекс Кит: товаров {len(kit_articles)}; найдено у поставщика {matched}; отсутствует у поставщика и обнулено на трёх обновляемых складах {zeroed}; при цене поставщика от 10 000 ₽ остатки передаются на Основной склад и Владивосток, ниже 10 000 ₽ московский остаток передаётся на Склад №1нино; обновлено цен с наценкой 18%, но не менее 450 ₽: {priced}; сохранено цен из выгрузки Кита: {fallback_priced}; положительный остаток хотя бы на одном складе {positive}.</p>
 </body></html>
 """
     (PUBLIC_DIR / "index.html").write_text(index, encoding="utf-8")
