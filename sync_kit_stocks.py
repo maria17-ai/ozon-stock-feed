@@ -119,7 +119,7 @@ def get_warehouses(token):
         token,
         "GET",
         "/warehouses",
-        {"status[]": "ACTIVE", "page": 1, "per_page": 100},
+        {"status": "ACTIVE", "page": 1, "per_page": 100},
     )
     warehouses = payload.get("warehouses", payload.get("items", []))
     by_title = {item["title"].strip(): item["id"] for item in warehouses}
