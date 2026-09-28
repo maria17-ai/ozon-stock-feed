@@ -13,6 +13,10 @@ PUBLIC_DIR = Path("public")
 KIT_ARTICLES_FILE = Path("kit_articles.txt")
 OUTPUT_FILE = PUBLIC_DIR / "yandex_kit_stock.yml"
 XML_OUTPUT_FILE = PUBLIC_DIR / "yandex_kit_stock.xml"
+VLADIVOSTOK_OUTPUT_FILE = PUBLIC_DIR / "yandex_kit_stock_vladivostok.yml"
+VLADIVOSTOK_XML_OUTPUT_FILE = PUBLIC_DIR / "yandex_kit_stock_vladivostok.xml"
+NINO_OUTPUT_FILE = PUBLIC_DIR / "yandex_kit_stock_nino.yml"
+NINO_XML_OUTPUT_FILE = PUBLIC_DIR / "yandex_kit_stock_nino.xml"
 PRICE_RATE = Decimal("0.18")
 MIN_MARKUP = Decimal("450")
 VLADIVOSTOK_MIN_SUPPLIER_PRICE = Decimal("10000")
@@ -115,14 +119,28 @@ def kit_price(supplier_price):
     )
 
 
-def write_feed(supplier_offers, supplier_prices=None):
-    PUBLIC_DIR.mkdir(exist_ok=True)
+def write_warehouse_feed(rows, quantity_key, output_file, xml_output_file, name, include_prices=False):
+    """Write one Kit-compatible source containing stock for exactly one warehouse."""
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
     root = ET.Element("yml_catalog", {"date": timestamp})
     shop = ET.SubElement(root, "shop")
-    ET.SubElement(shop, "name").text = "1000 размеров — остатки Яндекс Кит"
+    ET.SubElement(shop, "name").text = name
     offers_element = ET.SubElement(shop, "offers")
+    for row in rows:
+        offer = ET.SubElement(offers_element, "offer", {"id": row["article"]})
+        ET.SubElement(offer, "count").text = str(row[quantity_key])
+        if include_prices and row["price"] is not None:
+            ET.SubElement(offer, "price").text = row["price"]
+        ET.SubElement(offer, "vendorCode").text = row["article"]
+        ET.SubElement(offer, "param", {"name": "articul"}).text = row["article"]
+    ET.indent(root, space="  ")
+    ET.ElementTree(root).write(output_file, encoding="utf-8", xml_declaration=True)
+    shutil.copyfile(output_file, xml_output_file)
 
+
+def write_feed(supplier_offers, supplier_prices=None):
+    PUBLIC_DIR.mkdir(exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
     kit_articles = load_kit_articles()
     fallback_prices = load_fallback_prices()
     if supplier_prices is None:
@@ -133,16 +151,23 @@ def write_feed(supplier_offers, supplier_prices=None):
     positive = 0
     priced = 0
     fallback_priced = 0
+    rows = []
     for kit_article in kit_articles:
         supplier_article = supplier_article_from_kit(kit_article)
         if supplier_article in supplier_offers:
             supplier_moscow_quantity = supplier_offers[supplier_article]
             supplier_price = supplier_prices.get(supplier_article, Decimal("0"))
             # Products from 10,000 rubles go to the Main (Moscow) warehouse
-            # and Vladivostok. Cheaper products use only Warehouse No. 1nino.
+            # first. Vladivostok is enabled only when Moscow is out of stock.
+            # Cheaper products use only Warehouse No. 1nino.
             if supplier_price >= VLADIVOSTOK_MIN_SUPPLIER_PRICE:
                 moscow_quantity = supplier_moscow_quantity
-                vladivostok_quantity = vladivostok_offers.get(supplier_article, 0)
+                if supplier_moscow_quantity > 0:
+                    vladivostok_quantity = 0
+                else:
+                    vladivostok_quantity = vladivostok_offers.get(
+                        supplier_article, 0
+                    )
                 low_price_moscow_quantity = 0
             else:
                 moscow_quantity = 0
@@ -160,32 +185,37 @@ def write_feed(supplier_offers, supplier_prices=None):
             or low_price_moscow_quantity > 0
         ):
             positive += 1
-        # KIT is configured to match by seller article. Publish the bare
-        # article consistently: quotation marks prevent literal matching.
-        offer = ET.SubElement(offers_element, "offer", {"id": supplier_article})
-        ET.SubElement(
-            offer, "quantity", {"location": MOSCOW_KIT_LOCATION}
-        ).text = str(moscow_quantity)
-        ET.SubElement(
-            offer, "quantity", {"location": VLADIVOSTOK_KIT_LOCATION}
-        ).text = str(vladivostok_quantity)
-        ET.SubElement(
-            offer, "quantity", {"location": LOW_PRICE_MOSCOW_KIT_LOCATION}
-        ).text = str(low_price_moscow_quantity)
+        price_text = None
         if supplier_article in supplier_prices:
             price = kit_price(supplier_prices[supplier_article])
-            ET.SubElement(offer, "price").text = str(price)
+            price_text = str(price)
             priced += 1
         elif kit_article in fallback_prices:
             price = fallback_prices[kit_article]
-            ET.SubElement(offer, "price").text = format(price.normalize(), "f")
+            price_text = format(price.normalize(), "f")
             fallback_priced += 1
-        ET.SubElement(offer, "vendorCode").text = supplier_article
-        ET.SubElement(offer, "param", {"name": "articul"}).text = supplier_article
+        rows.append({
+            "article": supplier_article,
+            "moscow": moscow_quantity,
+            "vladivostok": vladivostok_quantity,
+            "nino": low_price_moscow_quantity,
+            "price": price_text,
+        })
 
-    ET.indent(root, space="  ")
-    ET.ElementTree(root).write(OUTPUT_FILE, encoding="utf-8", xml_declaration=True)
-    shutil.copyfile(OUTPUT_FILE, XML_OUTPUT_FILE)
+    # Kit binds each external YML source to one selected warehouse. Therefore
+    # publish three independent sources with the standard <count> element.
+    write_warehouse_feed(
+        rows, "moscow", OUTPUT_FILE, XML_OUTPUT_FILE,
+        "1000 размеров — Основной склад", include_prices=True,
+    )
+    write_warehouse_feed(
+        rows, "vladivostok", VLADIVOSTOK_OUTPUT_FILE,
+        VLADIVOSTOK_XML_OUTPUT_FILE, "1000 размеров — Владивосток",
+    )
+    write_warehouse_feed(
+        rows, "nino", NINO_OUTPUT_FILE, NINO_XML_OUTPUT_FILE,
+        "1000 размеров — Склад №1нино",
+    )
 
     index = f"""<!doctype html>
 <html lang=\"ru\"><meta charset=\"utf-8\"><title>Фиды остатков</title>
@@ -193,9 +223,11 @@ def write_feed(supplier_offers, supplier_prices=None):
 <p>Обновлено (UTC): {timestamp}</p>
 <ul>
   <li><a href=\"ozon_stock_moscow.xml\">Ozon — склад Москва</a></li>
-  <li><a href=\"yandex_kit_stock.xml\">Яндекс Кит — три склада</a></li>
+  <li><a href=\"yandex_kit_stock.xml\">Яндекс Кит — Основной склад</a></li>
+  <li><a href=\"yandex_kit_stock_vladivostok.xml\">Яндекс Кит — Владивосток</a></li>
+  <li><a href=\"yandex_kit_stock_nino.xml\">Яндекс Кит — Склад №1нино</a></li>
 </ul>
-<p>Яндекс Кит: товаров {len(kit_articles)}; найдено у поставщика {matched}; отсутствует у поставщика и обнулено на трёх обновляемых складах {zeroed}; при цене поставщика от 10 000 ₽ остатки передаются на Основной склад и Владивосток, ниже 10 000 ₽ московский остаток передаётся на Склад №1нино; обновлено цен с наценкой 18%, но не менее 450 ₽: {priced}; сохранено цен из выгрузки Кита: {fallback_priced}; положительный остаток хотя бы на одном складе {positive}.</p>
+<p>Яндекс Кит: товаров {len(kit_articles)}; найдено у поставщика {matched}; отсутствует у поставщика и обнулено на трёх обновляемых складах {zeroed}; при цене поставщика от 10 000 ₽ приоритет имеет Основной склад (Москва), а Владивосток включается только при нулевом остатке Москвы; ниже 10 000 ₽ московский остаток передаётся на Склад №1нино; обновлено цен с наценкой 18%, но не менее 450 ₽: {priced}; сохранено цен из выгрузки Кита: {fallback_priced}; положительный остаток хотя бы на одном складе {positive}.</p>
 </body></html>
 """
     (PUBLIC_DIR / "index.html").write_text(index, encoding="utf-8")
