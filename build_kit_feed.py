@@ -15,6 +15,9 @@ OUTPUT_FILE = PUBLIC_DIR / "yandex_kit_stock.yml"
 XML_OUTPUT_FILE = PUBLIC_DIR / "yandex_kit_stock.xml"
 PRICE_RATE = Decimal("0.18")
 MIN_MARKUP = Decimal("450")
+MOSCOW_KIT_LOCATION = "Основной склад"
+VLADIVOSTOK_SUPPLIER_LOCATION = "Владивосток"
+VLADIVOSTOK_KIT_LOCATION = "Владивосток"
 
 
 def load_kit_articles():
@@ -76,6 +79,31 @@ def extract_supplier_prices():
     return prices
 
 
+def extract_supplier_vladivostok_stock():
+    """Read Vladivostok stock from the same supplier snapshot as Moscow."""
+    stock = {}
+    for _, element in ET.iterparse(build_feed.SOURCE_FILE, events=("end",)):
+        if element.tag != "offer":
+            continue
+        article = ""
+        quantity = 0
+        for child in element:
+            if child.tag == "param" and child.attrib.get("name") == "articul":
+                article = (child.text or "").strip()
+            elif (
+                child.tag == "quantity"
+                and child.attrib.get("location") == VLADIVOSTOK_SUPPLIER_LOCATION
+            ):
+                try:
+                    quantity = max(0, int(float((child.text or "0").strip())))
+                except ValueError:
+                    quantity = 0
+        if article:
+            stock[article] = quantity
+        element.clear()
+    return stock
+
+
 def kit_price(supplier_price):
     markup = max(supplier_price * PRICE_RATE, MIN_MARKUP)
     return int(
@@ -97,6 +125,7 @@ def write_feed(supplier_offers, supplier_prices=None):
     fallback_prices = load_fallback_prices()
     if supplier_prices is None:
         supplier_prices = extract_supplier_prices()
+    vladivostok_offers = extract_supplier_vladivostok_stock()
     matched = 0
     zeroed = 0
     positive = 0
@@ -105,17 +134,24 @@ def write_feed(supplier_offers, supplier_prices=None):
     for kit_article in kit_articles:
         supplier_article = supplier_article_from_kit(kit_article)
         if supplier_article in supplier_offers:
-            quantity = supplier_offers[supplier_article]
+            moscow_quantity = supplier_offers[supplier_article]
+            vladivostok_quantity = vladivostok_offers.get(supplier_article, 0)
             matched += 1
         else:
-            quantity = 0
+            moscow_quantity = 0
+            vladivostok_quantity = 0
             zeroed += 1
-        if quantity > 0:
+        if moscow_quantity > 0 or vladivostok_quantity > 0:
             positive += 1
         # KIT is configured to match by seller article. Publish the bare
         # article consistently: quotation marks prevent literal matching.
         offer = ET.SubElement(offers_element, "offer", {"id": supplier_article})
-        ET.SubElement(offer, "count").text = str(quantity)
+        ET.SubElement(
+            offer, "quantity", {"location": MOSCOW_KIT_LOCATION}
+        ).text = str(moscow_quantity)
+        ET.SubElement(
+            offer, "quantity", {"location": VLADIVOSTOK_KIT_LOCATION}
+        ).text = str(vladivostok_quantity)
         if supplier_article in supplier_prices:
             price = kit_price(supplier_prices[supplier_article])
             ET.SubElement(offer, "price").text = str(price)
@@ -137,9 +173,9 @@ def write_feed(supplier_offers, supplier_prices=None):
 <p>Обновлено (UTC): {timestamp}</p>
 <ul>
   <li><a href=\"ozon_stock_moscow.xml\">Ozon — склад Москва</a></li>
-  <li><a href=\"yandex_kit_stock.xml\">Яндекс Кит — Основной склад</a></li>
+  <li><a href=\"yandex_kit_stock.xml\">Яндекс Кит — Основной склад и Владивосток</a></li>
 </ul>
-<p>Яндекс Кит: товаров {len(kit_articles)}; найдено у поставщика {matched}; отсутствует у поставщика и обнулено {zeroed}; обновлено цен с наценкой 18%, но не менее 450 ₽: {priced}; сохранено цен из выгрузки Кита: {fallback_priced}; положительный остаток {positive}.</p>
+<p>Яндекс Кит: товаров {len(kit_articles)}; найдено у поставщика {matched}; отсутствует у поставщика и обнулено на двух обновляемых складах {zeroed}; обновлено цен с наценкой 18%, но не менее 450 ₽: {priced}; сохранено цен из выгрузки Кита: {fallback_priced}; положительный остаток хотя бы на одном складе {positive}.</p>
 </body></html>
 """
     (PUBLIC_DIR / "index.html").write_text(index, encoding="utf-8")
