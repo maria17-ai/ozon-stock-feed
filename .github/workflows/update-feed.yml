@@ -1,4 +1,4 @@
-name: Update Ozon stock feed
+name: Update Ozon prices and stock feed
 
 on:
   workflow_dispatch:
@@ -27,6 +27,11 @@ jobs:
         uses: actions/checkout@v4
       - name: Build feed
         run: python3 build_feed.py
+      - name: Check Yandex Kit API stock mapping (no stock changes)
+        env:
+          YANDEX_KIT_API_TOKEN: ${{ secrets.YANDEX_KIT_API_TOKEN }}
+          KIT_STOCK_SYNC_LIVE: "false"
+        run: python3 sync_kit_stocks.py
       - name: Validate feed
         run: |
           python3 - <<'PY'
@@ -37,7 +42,11 @@ jobs:
           assert root.tag == "yml_catalog"
           assert len(offers) > 1000
           assert len({item.attrib["id"] for item in offers}) == len(offers)
-          print(f"Validated {len(offers)} offers")
+          prices = [int(item.findtext("price")) for item in offers if item.find("price") is not None]
+          assert prices, "Feed contains no prices"
+          assert all(price > 0 and price % 10 == 0 for price in prices)
+          assert all(item.find("./outlets/outlet") is not None for item in offers)
+          print(f"Validated {len(offers)} offers and {len(prices)} prices")
           PY
       - name: Configure Pages
         uses: actions/configure-pages@v5
@@ -48,4 +57,3 @@ jobs:
       - name: Publish
         id: deployment
         uses: actions/deploy-pages@v4
-
