@@ -145,7 +145,6 @@ def write_feed(supplier_offers, supplier_prices=None):
     fallback_prices = load_fallback_prices()
     if supplier_prices is None:
         supplier_prices = extract_supplier_prices()
-    vladivostok_offers = extract_supplier_vladivostok_stock()
     matched = 0
     zeroed = 0
     positive = 0
@@ -155,35 +154,14 @@ def write_feed(supplier_offers, supplier_prices=None):
     for kit_article in kit_articles:
         supplier_article = supplier_article_from_kit(kit_article)
         if supplier_article in supplier_offers:
-            supplier_moscow_quantity = supplier_offers[supplier_article]
-            supplier_price = supplier_prices.get(supplier_article, Decimal("0"))
-            # Products from 10,000 rubles go to the Main (Moscow) warehouse
-            # first. Vladivostok is enabled only when Moscow is out of stock.
-            # Cheaper products use only Warehouse No. 1nino.
-            if supplier_price >= VLADIVOSTOK_MIN_SUPPLIER_PRICE:
-                moscow_quantity = supplier_moscow_quantity
-                if supplier_moscow_quantity > 0:
-                    vladivostok_quantity = 0
-                else:
-                    vladivostok_quantity = vladivostok_offers.get(
-                        supplier_article, 0
-                    )
-                low_price_moscow_quantity = 0
-            else:
-                moscow_quantity = 0
-                vladivostok_quantity = 0
-                low_price_moscow_quantity = supplier_moscow_quantity
+            # The single Kit YML source updates the Main warehouse only.
+            # Always publish the supplier's Moscow stock here.
+            moscow_quantity = supplier_offers[supplier_article]
             matched += 1
         else:
             moscow_quantity = 0
-            vladivostok_quantity = 0
-            low_price_moscow_quantity = 0
             zeroed += 1
-        if (
-            moscow_quantity > 0
-            or vladivostok_quantity > 0
-            or low_price_moscow_quantity > 0
-        ):
+        if moscow_quantity > 0:
             positive += 1
         price_text = None
         if supplier_article in supplier_prices:
@@ -197,24 +175,13 @@ def write_feed(supplier_offers, supplier_prices=None):
         rows.append({
             "article": supplier_article,
             "moscow": moscow_quantity,
-            "vladivostok": vladivostok_quantity,
-            "nino": low_price_moscow_quantity,
             "price": price_text,
         })
 
-    # Kit binds each external YML source to one selected warehouse. Therefore
-    # publish three independent sources with the standard <count> element.
+    # Kit accepts one YML source. It updates the Main warehouse with <count>.
     write_warehouse_feed(
         rows, "moscow", OUTPUT_FILE, XML_OUTPUT_FILE,
         "1000 размеров — Основной склад", include_prices=True,
-    )
-    write_warehouse_feed(
-        rows, "vladivostok", VLADIVOSTOK_OUTPUT_FILE,
-        VLADIVOSTOK_XML_OUTPUT_FILE, "1000 размеров — Владивосток",
-    )
-    write_warehouse_feed(
-        rows, "nino", NINO_OUTPUT_FILE, NINO_XML_OUTPUT_FILE,
-        "1000 размеров — Склад №1нино",
     )
 
     index = f"""<!doctype html>
@@ -224,10 +191,8 @@ def write_feed(supplier_offers, supplier_prices=None):
 <ul>
   <li><a href=\"ozon_stock_moscow.xml\">Ozon — склад Москва</a></li>
   <li><a href=\"yandex_kit_stock.xml\">Яндекс Кит — Основной склад</a></li>
-  <li><a href=\"yandex_kit_stock_vladivostok.xml\">Яндекс Кит — Владивосток</a></li>
-  <li><a href=\"yandex_kit_stock_nino.xml\">Яндекс Кит — Склад №1нино</a></li>
 </ul>
-<p>Яндекс Кит: товаров {len(kit_articles)}; найдено у поставщика {matched}; отсутствует у поставщика и обнулено на трёх обновляемых складах {zeroed}; при цене поставщика от 10 000 ₽ приоритет имеет Основной склад (Москва), а Владивосток включается только при нулевом остатке Москвы; ниже 10 000 ₽ московский остаток передаётся на Склад №1нино; обновлено цен с наценкой 18%, но не менее 450 ₽: {priced}; сохранено цен из выгрузки Кита: {fallback_priced}; положительный остаток хотя бы на одном складе {positive}.</p>
+<p>Яндекс Кит: товаров {len(kit_articles)}; найдено у поставщика {matched}; отсутствует у поставщика и обнулено на Основном складе {zeroed}; в Основной склад передаётся остаток поставщика Москва без ограничения по цене; обновлено цен с наценкой 18%, но не менее 450 ₽: {priced}; сохранено цен из выгрузки Кита: {fallback_priced}; положительный остаток {positive}.</p>
 </body></html>
 """
     (PUBLIC_DIR / "index.html").write_text(index, encoding="utf-8")
