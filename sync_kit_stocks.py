@@ -18,7 +18,7 @@ KIT_ARTICLES_FILE = Path("kit_articles.txt")
 WAREHOUSE_TITLES = {
     "main": "Основной склад",
     "vladivostok": "Владивосток",
-    "moscow_10": "мск 10",
+    "moscow_10": "Склад №1 МСК10",
 }
 MOSCOW_SUPPLIER_LOCATION = "Москва"
 VLADIVOSTOK_SUPPLIER_LOCATION = "Владивосток"
